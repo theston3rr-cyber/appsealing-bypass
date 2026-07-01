@@ -5,8 +5,11 @@
 //   -dynamiclib -o AppSealingBypass.dylib hook.m fishhook.c \
 //   -framework Foundation -I. -fobjc-arc
 
+#import <Foundation/Foundation.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdarg.h>
+#include <errno.h>
 #include <dlfcn.h>
 #include <sys/stat.h>
 #include <sys/sysctl.h>
@@ -165,21 +168,21 @@ int hooked_dladdr(const void *addr, Dl_info *info) {
 // ============================================================
 FILE* hooked_fopen(const char *path, const char *mode) {
     if (!path) return orig_fopen(path, mode);
-    
+
     // Block AppSealing from reading the license file
     if (g_lic_path && strstr(path, "appsealing.lic")) {
         bypass_log("Blocked: appsealing.lic read");
         errno = ENOENT;
         return NULL;
     }
-    
+
     // Block AppSealing from reading the binary for hash check
     if (g_binary_path && strcmp(path, g_binary_path) == 0) {
         bypass_log("Blocked: binary read via fopen");
         errno = EACCES;
         return NULL;
     }
-    
+
     // Block jailbreak-related paths
     static const char *jb_paths[] = {
         "/private/var/lib/apt/",
@@ -199,7 +202,7 @@ FILE* hooked_fopen(const char *path, const char *mode) {
             return NULL;
         }
     }
-    
+
     return orig_fopen(path, mode);
 }
 
@@ -208,7 +211,7 @@ FILE* hooked_fopen(const char *path, const char *mode) {
 // ============================================================
 int hooked_open(const char *path, int flags, ...) {
     if (!path) return orig_open(path, flags);
-    
+
     if (g_lic_path && strstr(path, "appsealing.lic")) {
         errno = ENOENT;
         return -1;
@@ -217,7 +220,7 @@ int hooked_open(const char *path, int flags, ...) {
         errno = EACCES;
         return -1;
     }
-    
+
     return orig_open(path, flags);
 }
 
@@ -226,7 +229,7 @@ int hooked_open(const char *path, int flags, ...) {
 // ============================================================
 int hooked_stat(const char *path, struct stat *buf) {
     if (!path) return orig_stat(path, buf);
-    
+
     static const char *hidden[] = {
         "/private/var/lib/apt/",
         "/Applications/Cydia.app",
@@ -252,7 +255,7 @@ int hooked_lstat(const char *path, struct stat *buf) {
 // ============================================================
 int hooked_access(const char *path, int mode) {
     if (!path) return orig_access(path, mode);
-    
+
     static const char *blocked[] = {
         "/private/var/lib/apt/",
         "/Applications/Cydia.app",
@@ -273,7 +276,7 @@ int hooked_access(const char *path, int mode) {
 // ============================================================
 void* hooked_dlopen(const char *path, int mode) {
     if (!path) return orig_dlopen(path, mode);
-    
+
     if (strstr(path, "Substrate") || strstr(path, "substrate") ||
         strstr(path, "cyc") || strstr(path, "CydiaSubstrate")) {
         bypass_logf("Blocked dlopen: %s", path);
@@ -284,7 +287,7 @@ void* hooked_dlopen(const char *path, int mode) {
 
 void* hooked_dlsym(void *handle, const char *symbol) {
     if (!symbol) return orig_dlsym(handle, symbol);
-    
+
     if (strstr(symbol, "MSHook") || strstr(symbol, "Substrate")) {
         return NULL;
     }
@@ -312,7 +315,7 @@ int hooked_sysctl(int *mib, u_int namelen, void *oldp, size_t *oldlenp, void *ne
 
 int hooked_sysctlbyname(const char *name, void *oldp, size_t *oldlenp, void *newp, size_t newlen) {
     if (!name) return orig_sysctlbyname(name, oldp, oldlenp, newp, newlen);
-    
+
     if (strstr(name, "debug") || strstr(name, "proc_info") ||
         strstr(name, "kern.proc")) {
         if (oldp && oldlenp) *oldlenp = 0;
@@ -326,13 +329,13 @@ int hooked_sysctlbyname(const char *name, void *oldp, size_t *oldlenp, void *new
 // ============================================================
 char** hooked_objc_copyClassNamesForImage(const char *image, unsigned int *outCount) {
     if (!image) return orig_objc_copyClassNamesForImage(image, outCount);
-    
+
     // Block queries for our own dylib
     if (strstr(image, DYLIB_NAME) || strstr(image, "Substrate")) {
         if (outCount) *outCount = 0;
         return NULL;
     }
-    
+
     return orig_objc_copyClassNamesForImage(image, outCount);
 }
 
@@ -344,10 +347,10 @@ __attribute__((constructor(1)))
 static void bypass_init(void) {
     @autoreleasepool {
         discover_paths();
-        
+
         // Store original dyld count (for reference only)
         uint32_t dyld_count = _dyld_image_count();
-        
+
         // Register ALL hooks via fishhook
         struct rebinding bindings[] = {
             // Dyld image hiding (CRITICAL FOR APPSEALING)
@@ -356,34 +359,33 @@ static void bypass_init(void) {
             {"_dyld_get_image_header", hooked_dyld_get_image_header, (void**)&orig_dyld_get_image_header},
             {"_dyld_get_image_vmaddr_slide", hooked_dyld_get_image_vmaddr_slide, (void**)&orig_dyld_get_image_vmaddr_slide},
             {"dladdr", hooked_dladdr, (void**)&orig_dladdr},
-            
+
             // File I/O blocking (prevent integrity hash check)
             {"fopen", hooked_fopen, (void**)&orig_fopen},
             {"open", hooked_open, (void**)&orig_open},
-            
+
             // File hiding (jailbreak + license)
             {"stat", hooked_stat, (void**)&orig_stat},
             {"lstat", hooked_lstat, (void**)&orig_lstat},
             {"access", hooked_access, (void**)&orig_access},
-            
+
             // Library loading
             {"dlopen", hooked_dlopen, (void**)&orig_dlopen},
             {"dlsym", hooked_dlsym, (void**)&orig_dlsym},
-            
+
             // System introspection
             {"sysctl", hooked_sysctl, (void**)&orig_sysctl},
             {"sysctlbyname", hooked_sysctlbyname, (void**)&orig_sysctlbyname},
-            
+
             // ObjC runtime
             {"objc_copyClassNamesForImage", hooked_objc_copyClassNamesForImage, (void**)&orig_objc_copyClassNamesForImage},
         };
-        
+
         int n = sizeof(bindings) / sizeof(bindings[0]);
         int ret = rebind_symbols(bindings, n);
-        
+
         if (ret == 0) {
-            bypass_logf("SUCCESS: %d hooks installed. Original dyld count: %u", 
-                       n, g_original_image_count);
+            bypass_logf("SUCCESS: %d hooks installed. Original dyld count: %u", n, dyld_count);
         } else {
             bypass_logf("FAILED: rebind_symbols returned %d", ret);
         }
