@@ -10,6 +10,7 @@
 #include <string.h>
 #include <stdarg.h>
 #include <errno.h>
+#include <sys/syslog.h>
 #include <dlfcn.h>
 #include <sys/stat.h>
 #include <sys/sysctl.h>
