@@ -1,0 +1,58 @@
+name: Build AppSealingBypass.dylib
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  build:
+    runs-on: macos-latest  # macOS runner with Xcode
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Show Xcode version
+      run: xcodebuild -version
+    
+    - name: Build dylib
+      run: |
+        SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
+        echo "SDK: $SDK_PATH"
+        
+        # Compile the dylib for arm64
+        xcrun -sdk iphoneos clang \
+          -arch arm64 \
+          -miphoneos-version-min=14.0 \
+          -isysroot "$SDK_PATH" \
+          -dynamiclib \
+          -O2 \
+          -o AppSealingBypass.dylib \
+          src/hook.m src/fishhook.c \
+          -framework Foundation \
+          -I src/ \
+          -Wno-deprecated-declarations \
+          -fobjc-arc
+        
+        echo "=== Build complete ==="
+        file AppSealingBypass.dylib
+        ls -lh AppSealingBypass.dylib
+    
+    - name: Verify dylib
+      run: |
+        # Check architecture
+        lipo -info AppSealingBypass.dylib
+        
+        # Check it's a valid Mach-O
+        otool -h AppSealingBypass.dylib
+        
+        # Check load commands
+        otool -L AppSealingBypass.dylib | head -10
+    
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: AppSealingBypass.dylib
+        path: AppSealingBypass.dylib
+        compression-level: 0  # Don't compress — binary stays raw
